@@ -29,6 +29,7 @@ type Request struct {
 	Extensions     []pkix.Extension `asn1:"optional,tag:0"`
 }
 
+// NewRequest creates a request based on the given digest.
 func NewRequest(digest digest.Digest) (*Request, error) {
 	hashAlgorithm, found := DigestAlgorithmOIDs[digest.Algorithm()]
 	if !found {
