@@ -16,6 +16,11 @@ type Response struct {
 	TimeStampToken TimeStampToken `asn1:"optional"`
 }
 
+func (r *Response) UnmarshalBinary(data []byte) error {
+	_, err := asn1.Unmarshal(data, r)
+	return err
+}
+
 // PKIStatusInfo contains status codes and failure information for PKI messages.
 // PKIStatusInfo ::= SEQUENCE {
 //     status        PKIStatus,
