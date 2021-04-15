@@ -3,8 +3,11 @@ package timestamp
 import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"errors"
 	"math/big"
 	"time"
+
+	"go.mozilla.org/pkcs7"
 )
 
 // Response is a time-stamping response.
@@ -13,12 +16,37 @@ import (
 //     timeStampToken          TimeStampToken     OPTIONAL  }
 type Response struct {
 	Status         PKIStatusInfo
-	TimeStampToken TimeStampToken `asn1:"optional"`
+	TimeStampToken asn1.RawValue `asn1:"optional"`
+}
+
+func (r *Response) MarshalBinary() ([]byte, error) {
+	if r == nil {
+		return nil, errors.New("null response")
+	}
+	return asn1.Marshal(*r)
 }
 
 func (r *Response) UnmarshalBinary(data []byte) error {
 	_, err := asn1.Unmarshal(data, r)
 	return err
+}
+
+func (r *Response) SignedData() (*pkcs7.PKCS7, error) {
+	return pkcs7.Parse(r.TimeStampToken.FullBytes)
+}
+
+func (r *Response) TimeStampTokenInfo() (*TSTInfo, error) {
+	signed, err := r.SignedData()
+	if err != nil {
+		return nil, err
+	}
+
+	info := &TSTInfo{}
+	if _, err := asn1.Unmarshal(signed.Content, info); err != nil {
+		return nil, err
+	}
+
+	return info, nil
 }
 
 // PKIStatusInfo contains status codes and failure information for PKI messages.
@@ -30,62 +58,6 @@ type PKIStatusInfo struct {
 	Status       PKIStatus
 	StatusString string         `asn1:"optional"`
 	FailInfo     PKIFailureInfo `asn1:"optional"`
-}
-
-// TimeStampToken is of ContentInfo type
-type TimeStampToken struct {
-	ContentType asn1.ObjectIdentifier
-	Content     SignedData `asn1:"explicit,tag:0"`
-}
-
-// SignedData ::= SEQUENCE {
-//     version CMSVersion,
-//     digestAlgorithms DigestAlgorithmIdentifiers,
-//     encapContentInfo EncapsulatedContentInfo,
-//     certificates [0] IMPLICIT CertificateSet OPTIONAL,
-//     crls [1] IMPLICIT RevocationInfoChoices OPTIONAL,
-//     signerInfos SignerInfos }
-type SignedData struct {
-	Version                 int
-	DigestAlgorithms        []pkix.AlgorithmIdentifier `asn1:"set"`
-	EncapsulatedContentInfo EncapsulatedContentInfo
-	Certificates            []asn1.RawValue `asn1:"optional,set,tag:0"`
-	CRLs                    []asn1.RawValue `asn1:"optional,set,tag:1"`
-	SignerInfos             []SignerInfo    `asn1:"set"`
-}
-
-// EncapsulatedContentInfo ::= SEQUENCE {
-//     eContentType ContentType,
-//     eContent [0] EXPLICIT OCTET STRING OPTIONAL }
-type EncapsulatedContentInfo struct {
-	ContentType asn1.ObjectIdentifier
-	Content     TSTInfo `asn1:"optional,explicit,tag:0"`
-}
-
-// SignerInfo ::= SEQUENCE {
-//     version CMSVersion,
-//     sid SignerIdentifier,
-//     digestAlgorithm DigestAlgorithmIdentifier,
-//     signedAttrs [0] IMPLICIT SignedAttributes OPTIONAL,
-//     signatureAlgorithm SignatureAlgorithmIdentifier,
-//     signature SignatureValue,
-//     unsignedAttrs [1] IMPLICIT UnsignedAttributes OPTIONAL }
-type SignerInfo struct {
-	Version            int
-	SID                asn1.RawValue
-	DigestAlgorithm    pkix.AlgorithmIdentifier
-	SignedAttributes   []Attribute `asn1:"optional,tag:0"`
-	SignatureAlgorithm pkix.AlgorithmIdentifier
-	Signature          []byte
-	UnsignedAttributes []Attribute `asn1:"optional,set,tag:1"`
-}
-
-// Attribute ::= SEQUENCE {
-//     attrType OBJECT IDENTIFIER,
-//     attrValues SET OF AttributeValue }
-type Attribute struct {
-	Type   asn1.ObjectIdentifier
-	Values []asn1.RawValue `asn1:"set"`
 }
 
 // TSTInfo ::= SEQUENCE  {

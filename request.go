@@ -58,6 +58,11 @@ func (r *Request) MarshalBinary() ([]byte, error) {
 	return asn1.Marshal(*r)
 }
 
+func (r *Request) UnmarshalBinary(data []byte) error {
+	_, err := asn1.Unmarshal(data, r)
+	return err
+}
+
 // MessageImprint contains the hash of the datum to be time-stamped.
 // MessageImprint ::= SEQUENCE  {
 //     hashAlgorithm                AlgorithmIdentifier,
@@ -68,4 +73,4 @@ type MessageImprint struct {
 }
 
 // TSAPolicyID indicates the TSA policy.
-type TSAPolicyID asn1.ObjectIdentifier
+type TSAPolicyID = asn1.ObjectIdentifier
