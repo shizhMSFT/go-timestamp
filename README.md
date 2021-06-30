@@ -42,7 +42,7 @@ func main() {
 	fmt.Println("status:", resp.Status.Status)
 	info, err := resp.TimeStampTokenInfo()
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 	fmt.Println("time:", info.GenTime)
 	fmt.Println("serial:", info.SerialNumber)
