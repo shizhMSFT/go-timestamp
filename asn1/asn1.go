@@ -1,118 +1,72 @@
 package asn1
 
 import (
-	"bytes"
 	"errors"
 	"io"
 )
 
 var (
+	ErrInvalidValue      = errors.New("asn1: invalid value")
+	ErrConstructed       = errors.New("asn1: constructed value")
+	ErrPrimitive         = errors.New("asn1: primitive value")
 	ErrUnsupportedLength = errors.New("asn1: length methond not supported")
 )
 
-type Value struct {
-	identifier []byte
-	content    []byte
+type Value interface {
+	Encode(ValueWriter) error
+	EncodedLen() int
 }
 
-func NewValue(identifier, content []byte) *Value {
-	return &Value{
-		identifier: identifier,
-		content:    content,
+func Decode(r ValueReader) (Value, error) {
+	peekIdentifier, err := r.ReadByte()
+	if err != nil {
+		return nil, err
 	}
+	err = r.UnreadByte()
+	if err != nil {
+		return nil, err
+	}
+	if isPrimitive(peekIdentifier) {
+		return DecodePrimitive(r)
+	}
+	return DecodeConstructed(r)
 }
 
-func (v *Value) IsPrimitive() bool {
-	return v.identifier[0]&0x20 == 0
+func isPrimitive(identifier byte) bool {
+	return identifier&0x20 == 0
 }
 
-func (v *Value) Members() ([]*Value, error) {
-	if v.IsPrimitive() {
-		return nil, nil
+func encodedLengthSize(length int) int {
+	if length < 128 {
+		return 1
 	}
 
-	var result []*Value
-	reader := bytes.NewReader(v.content)
-	for reader.Len() > 0 {
-		value, err := parseValue(reader)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, value)
-	}
-	return result, nil
-}
-
-func (v *Value) MarshalBinary() ([]byte, error) {
-	// Calculate the size of length
-	length := len(v.content)
 	lengthSize := 1
-	if length > 127 {
-		for l := length; l > 0; lengthSize++ {
-			l >>= 8
-		}
+	for ; length > 0; lengthSize++ {
+		length >>= 8
 	}
-
-	// Allocate buffer
-	offset := len(v.identifier)
-	buf := make([]byte, offset+lengthSize+len(v.content))
-
-	// Fill in buffer
-	copy(buf, v.identifier)
-	if length > 127 {
-		buf[offset] = byte(0x80 | byte(lengthSize-1))
-		offset++
-		for i := 1; i < lengthSize; i++ {
-			buf[offset] = byte(length >> (8 * (4 - i)))
-			offset++
-		}
-	} else {
-		buf[offset] = byte(length)
-		offset++
-	}
-	copy(buf[offset:], v.content)
-
-	return buf, nil
+	return lengthSize
 }
 
-func (v *Value) UnmarshalBinary(data []byte) error {
-	r, err := parseValue(bytes.NewReader(data))
+func encodeLength(w io.ByteWriter, length int) error {
+	if length < 128 {
+		return w.WriteByte(byte(length))
+	}
+
+	lengthSize := encodedLengthSize(length)
+	err := w.WriteByte(0x80 | byte(lengthSize-1))
 	if err != nil {
 		return err
 	}
-
-	*v = *r
+	for i := 1; i < lengthSize; i++ {
+		if err = w.WriteByte(byte(length >> (8 * (4 - i)))); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-type valueReader interface {
-	io.Reader
-	io.ByteReader
-}
-
-func parseValue(r valueReader) (*Value, error) {
-	identifier, err := parseIdentifier(r)
-	if err != nil {
-		return nil, err
-	}
-	length, err := parseLength(r)
-	if err != nil {
-		return nil, err
-	}
-
-	content := make([]byte, length)
-	_, err = io.ReadFull(r, content)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Value{
-		identifier: identifier,
-		content:    content,
-	}, nil
-}
-
-func parseIdentifier(r io.ByteReader) ([]byte, error) {
+func decodeIdentifier(r io.ByteReader) ([]byte, error) {
 	b, err := r.ReadByte()
 	if err != nil {
 		return nil, err
@@ -122,6 +76,9 @@ func parseIdentifier(r io.ByteReader) ([]byte, error) {
 		for {
 			b, err = r.ReadByte()
 			if err != nil {
+				if err == io.EOF {
+					return nil, ErrInvalidValue
+				}
 				return nil, err
 			}
 			identifier = append(identifier, b)
@@ -133,9 +90,12 @@ func parseIdentifier(r io.ByteReader) ([]byte, error) {
 	return identifier, nil
 }
 
-func parseLength(r io.ByteReader) (int, error) {
+func decodeLength(r io.ByteReader) (int, error) {
 	b, err := r.ReadByte()
 	if err != nil {
+		if err == io.EOF {
+			return 0, ErrInvalidValue
+		}
 		return 0, err
 	}
 	switch {
@@ -153,6 +113,9 @@ func parseLength(r io.ByteReader) (int, error) {
 	for i := 0; i < n; i++ {
 		b, err = r.ReadByte()
 		if err != nil {
+			if err == io.EOF {
+				return 0, ErrInvalidValue
+			}
 			return 0, err
 		}
 		length = (length << 8) | int(b)
