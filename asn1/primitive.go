@@ -39,7 +39,7 @@ func DecodePrimitive(r ValueReader) (*PrimitiveValue, error) {
 	_, err = io.ReadFull(r, content)
 	if err != nil {
 		if err == io.EOF {
-			return nil, ErrInvalidValue
+			return nil, ErrEarlyEOF
 		}
 		return nil, err
 	}

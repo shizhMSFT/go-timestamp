@@ -1,15 +1,15 @@
 package asn1
 
 import (
-	"errors"
+	"encoding/asn1"
 	"io"
 )
 
 var (
-	ErrInvalidValue      = errors.New("asn1: invalid value")
-	ErrConstructed       = errors.New("asn1: constructed value")
-	ErrPrimitive         = errors.New("asn1: primitive value")
-	ErrUnsupportedLength = errors.New("asn1: length methond not supported")
+	ErrEarlyEOF          = asn1.SyntaxError{Msg: "early EOF"}
+	ErrConstructed       = asn1.SyntaxError{Msg: "constructed value"}
+	ErrPrimitive         = asn1.SyntaxError{Msg: "primitive value"}
+	ErrUnsupportedLength = asn1.StructuralError{Msg: "length method not supported"}
 )
 
 type Value interface {
@@ -58,8 +58,8 @@ func encodeLength(w io.ByteWriter, length int) error {
 	if err != nil {
 		return err
 	}
-	for i := 1; i < lengthSize; i++ {
-		if err = w.WriteByte(byte(length >> (8 * (4 - i)))); err != nil {
+	for i := lengthSize - 1; i > 0; i-- {
+		if err = w.WriteByte(byte(length >> (8 * (i - 1)))); err != nil {
 			return err
 		}
 	}
@@ -77,7 +77,7 @@ func decodeIdentifier(r io.ByteReader) ([]byte, error) {
 			b, err = r.ReadByte()
 			if err != nil {
 				if err == io.EOF {
-					return nil, ErrInvalidValue
+					return nil, ErrEarlyEOF
 				}
 				return nil, err
 			}
@@ -94,7 +94,7 @@ func decodeLength(r io.ByteReader) (int, error) {
 	b, err := r.ReadByte()
 	if err != nil {
 		if err == io.EOF {
-			return 0, ErrInvalidValue
+			return 0, ErrEarlyEOF
 		}
 		return 0, err
 	}
@@ -114,7 +114,7 @@ func decodeLength(r io.ByteReader) (int, error) {
 		b, err = r.ReadByte()
 		if err != nil {
 			if err == io.EOF {
-				return 0, ErrInvalidValue
+				return 0, ErrEarlyEOF
 			}
 			return 0, err
 		}
