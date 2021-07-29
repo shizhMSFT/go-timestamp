@@ -1,6 +1,7 @@
 package timestamp
 
 import (
+	"crypto"
 	"crypto/x509"
 	"encoding/asn1"
 
@@ -20,8 +21,6 @@ var DigestAlgorithmOIDs = map[digest.Algorithm]asn1.ObjectIdentifier{
 	digest.SHA512: OIDDigestAlgorithmSHA512,
 }
 
-var ()
-
 var (
 	OIDSignatureAlgorithmRSA       = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
 	OIDSignatureAlgorithmRSASHA1   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 5}
@@ -33,6 +32,12 @@ var (
 	OIDSignatureAlgorithmECDSASHA256 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 2}
 	OIDSignatureAlgorithmECDSASHA384 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 3}
 	OIDSignatureAlgorithmECDSASHA512 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 4}
+)
+
+var (
+	OIDAttributeContentType   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 3}
+	OIDAttributeMessageDigest = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 4}
+	OIDAttributeSigningTime   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 5}
 )
 
 var (
@@ -72,4 +77,22 @@ func ConvertToSignatureAlgorithm(digestAlgorithm, signatureAlgorithm asn1.Object
 		return x509.ECDSAWithSHA512
 	}
 	return x509.UnknownSignatureAlgorithm
+}
+
+// ConvertToHash converts digest algorithm in OID to golang crypto hash if it is available.
+func ConvertToHash(digestAlgorithm asn1.ObjectIdentifier) (crypto.Hash, bool) {
+	var hash crypto.Hash
+	switch {
+	case OIDDigestAlgorithmSHA1.Equal(digestAlgorithm):
+		hash = crypto.SHA1
+	case OIDDigestAlgorithmSHA256.Equal(digestAlgorithm):
+		hash = crypto.SHA256
+	case OIDDigestAlgorithmSHA384.Equal(digestAlgorithm):
+		hash = crypto.SHA384
+	case OIDDigestAlgorithmSHA512.Equal(digestAlgorithm):
+		hash = crypto.SHA512
+	default:
+		return hash, false
+	}
+	return hash, hash.Available()
 }

@@ -2,6 +2,7 @@ package timestamp
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -9,6 +10,8 @@ import (
 	"math/big"
 	"time"
 )
+
+var ErrMissingAttribute = errors.New("missing signer attribute")
 
 // ContentInfo ::= SEQUENCE {
 //   contentType ContentType,
@@ -73,19 +76,20 @@ type IssuerAndSerialNumber struct {
 //   attrValues SET OF AttributeValue }
 type Attribute struct {
 	Type   asn1.ObjectIdentifier
-	Values []asn1.RawValue `asn1:"set"`
+	Values asn1.RawValue `asn1:"set"`
 }
 
 // ParsedSignedData is ready to be read and verified.
 type ParsedSignedData struct {
 	Content      []byte
+	ContentType  asn1.ObjectIdentifier
 	Certificates []*x509.Certificate
 	CRLs         []pkix.CertificateList
 
 	signers []SignerInfo
 }
 
-func ParseSignedData(data []byte, contentType asn1.ObjectIdentifier) (*ParsedSignedData, error) {
+func ParseSignedData(data []byte) (*ParsedSignedData, error) {
 	var contentInfo ContentInfo
 	if _, err := asn1.Unmarshal(data, &contentInfo); err != nil {
 		return nil, err
@@ -103,12 +107,9 @@ func ParseSignedData(data []byte, contentType asn1.ObjectIdentifier) (*ParsedSig
 		return nil, err
 	}
 
-	if !contentType.Equal(signedData.EncapsulatedContentInfo.ContentType) {
-		return nil, errors.New("unknown content type")
-	}
-
 	return &ParsedSignedData{
 		Content:      signedData.EncapsulatedContentInfo.Content.Bytes,
+		ContentType:  signedData.EncapsulatedContentInfo.ContentType,
 		Certificates: certs,
 		CRLs:         signedData.CRLs,
 		signers:      signedData.SignerInfos,
@@ -144,7 +145,7 @@ func (d *ParsedSignedData) Verify(roots *x509.CertPool) error {
 // verify verifies the trust in a top-down manner
 func (d *ParsedSignedData) verify(signer SignerInfo, opts x509.VerifyOptions) error {
 	// Fetch cert
-	cert := d.findCertificate(signer.SignerIdentifier)
+	cert := findCertificate(d.Certificates, signer.SignerIdentifier)
 	if cert == nil {
 		return errors.New("signer cert not found")
 	}
@@ -171,14 +172,74 @@ func (d *ParsedSignedData) verify(signer SignerInfo, opts x509.VerifyOptions) er
 		return err
 	}
 
+	// Verify attributes
+	if len(signer.SignedAttributes) == 0 {
+		return nil
+	}
+
+	var contentType asn1.ObjectIdentifier
+	if err := findAttribute(signer.SignedAttributes, OIDAttributeContentType, &contentType); err != nil {
+		return err
+	}
+	if !d.ContentType.Equal(contentType) {
+		return errors.New("mismatch content type")
+	}
+
+	var expectedDigest []byte
+	if err := findAttribute(signer.SignedAttributes, OIDAttributeMessageDigest, &expectedDigest); err != nil {
+		return err
+	}
+	hash, ok := ConvertToHash(signer.DigestAlgorithm.Algorithm)
+	if !ok {
+		return errors.New("unsupported digest algorithm")
+	}
+	actualDigest, err := ComputeHash(hash, d.Content)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(expectedDigest, actualDigest) {
+		return errors.New("mismatch digest")
+	}
+
+	var signingTime time.Time
+	if err := findAttribute(signer.SignedAttributes, OIDAttributeSigningTime, &signingTime); err != nil {
+		if err == ErrMissingAttribute {
+			return nil
+		}
+		return err
+	}
+	// sanity check on signing time
+	if signingTime.Before(cert.NotBefore) || signingTime.After(cert.NotAfter) {
+		return errors.New("signature signed when cert is inactive")
+	}
+
 	return nil
 }
 
-func (d *ParsedSignedData) findCertificate(signerID IssuerAndSerialNumber) *x509.Certificate {
-	for _, cert := range d.Certificates {
+func findCertificate(certs []*x509.Certificate, signerID IssuerAndSerialNumber) *x509.Certificate {
+	for _, cert := range certs {
 		if bytes.Equal(cert.RawIssuer, signerID.Issuer.FullBytes) && cert.SerialNumber.Cmp(signerID.SerialNumber) == 0 {
 			return cert
 		}
 	}
 	return nil
+}
+
+func findAttribute(attributes []Attribute, identifier asn1.ObjectIdentifier, attributeOut interface{}) error {
+	for _, attribute := range attributes {
+		if identifier.Equal(attribute.Type) {
+			_, err := asn1.Unmarshal(attribute.Values.Bytes, attributeOut)
+			return err
+		}
+	}
+	return ErrMissingAttribute
+}
+
+func ComputeHash(hash crypto.Hash, message []byte) ([]byte, error) {
+	h := hash.New()
+	_, err := h.Write(message)
+	if err != nil {
+		return nil, err
+	}
+	return h.Sum(nil), nil
 }
