@@ -42,7 +42,7 @@ type SignedData struct {
 //   eContent [0] EXPLICIT OCTET STRING OPTIONAL }
 type EncapsulatedContentInfo struct {
 	ContentType asn1.ObjectIdentifier
-	Content     asn1.RawValue `asn1:"explicit,optional,tag:0"`
+	Content     []byte `asn1:"explicit,optional,tag:0"`
 }
 
 // SignerInfo ::= SEQUENCE {
@@ -108,7 +108,7 @@ func ParseSignedData(data []byte) (*ParsedSignedData, error) {
 	}
 
 	return &ParsedSignedData{
-		Content:      signedData.EncapsulatedContentInfo.Content.Bytes,
+		Content:      signedData.EncapsulatedContentInfo.Content,
 		ContentType:  signedData.EncapsulatedContentInfo.ContentType,
 		Certificates: certs,
 		CRLs:         signedData.CRLs,
