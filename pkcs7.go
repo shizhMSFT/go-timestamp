@@ -1,12 +1,13 @@
 package timestamp
 
 import (
+	"bytes"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"errors"
-	"fmt"
 	"math/big"
+	"time"
 )
 
 // ContentInfo ::= SEQUENCE {
@@ -75,7 +76,16 @@ type Attribute struct {
 	Values []asn1.RawValue `asn1:"set"`
 }
 
-func ParseSignedData(data []byte, contentType asn1.ObjectIdentifier) ([]byte, error) {
+// ParsedSignedData is ready to be read and verified.
+type ParsedSignedData struct {
+	Content      []byte
+	Certificates []*x509.Certificate
+	CRLs         []pkix.CertificateList
+
+	signers []SignerInfo
+}
+
+func ParseSignedData(data []byte, contentType asn1.ObjectIdentifier) (*ParsedSignedData, error) {
 	var contentInfo ContentInfo
 	if _, err := asn1.Unmarshal(data, &contentInfo); err != nil {
 		return nil, err
@@ -93,9 +103,82 @@ func ParseSignedData(data []byte, contentType asn1.ObjectIdentifier) ([]byte, er
 		return nil, err
 	}
 
-	fmt.Println(certs)
 	if !contentType.Equal(signedData.EncapsulatedContentInfo.ContentType) {
 		return nil, errors.New("unknown content type")
 	}
-	return signedData.EncapsulatedContentInfo.Content.Bytes, nil
+
+	return &ParsedSignedData{
+		Content:      signedData.EncapsulatedContentInfo.Content.Bytes,
+		Certificates: certs,
+		CRLs:         signedData.CRLs,
+		signers:      signedData.SignerInfos,
+	}, nil
+}
+
+func (d *ParsedSignedData) Verify(roots *x509.CertPool) error {
+	if len(d.signers) == 0 {
+		return errors.New("no signer found")
+	}
+	if len(d.Certificates) == 0 {
+		return errors.New("no certs found")
+	}
+
+	intermediates := x509.NewCertPool()
+	for _, cert := range d.Certificates {
+		intermediates.AddCert(cert)
+	}
+	verifyOpts := x509.VerifyOptions{
+		Roots:         roots,
+		Intermediates: intermediates,
+		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+		CurrentTime:   time.Now().UTC(),
+	}
+	for _, signer := range d.signers {
+		if err := d.verify(signer, verifyOpts); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// verify verifies the trust in a top-down manner
+func (d *ParsedSignedData) verify(signer SignerInfo, opts x509.VerifyOptions) error {
+	// Fetch cert
+	cert := d.findCertificate(signer.SignerIdentifier)
+	if cert == nil {
+		return errors.New("signer cert not found")
+	}
+
+	// Verify cert chain
+	if _, err := cert.Verify(opts); err != nil {
+		return err
+	}
+
+	// Verify signature
+	algorithm := ConvertToSignatureAlgorithm(signer.DigestAlgorithm.Algorithm, signer.SignatureAlgorithm.Algorithm)
+	if algorithm == x509.UnknownSignatureAlgorithm {
+		return errors.New("unknown signature algorithm")
+	}
+	signed := d.Content
+	if len(signer.SignedAttributes) > 0 {
+		encoded, err := asn1.MarshalWithParams(signer.SignedAttributes, "set")
+		if err != nil {
+			return err
+		}
+		signed = encoded
+	}
+	if err := cert.CheckSignature(algorithm, signed, signer.Signature); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (d *ParsedSignedData) findCertificate(signerID IssuerAndSerialNumber) *x509.Certificate {
+	for _, cert := range d.Certificates {
+		if bytes.Equal(cert.RawIssuer, signerID.Issuer.FullBytes) && cert.SerialNumber.Cmp(signerID.SerialNumber) == 0 {
+			return cert
+		}
+	}
+	return nil
 }
