@@ -7,7 +7,7 @@ import (
 	"math/big"
 	"time"
 
-	"go.mozilla.org/pkcs7"
+	asn1util "github.com/shizhMSFT/go-timestamp/asn1"
 )
 
 // Response is a time-stamping response.
@@ -31,8 +31,19 @@ func (r *Response) UnmarshalBinary(data []byte) error {
 	return err
 }
 
-func (r *Response) SignedData() (*pkcs7.PKCS7, error) {
-	return pkcs7.Parse(r.TimeStampToken.FullBytes)
+func (r *Response) SignedData() (*ParsedSignedData, error) {
+	raw, err := asn1util.ConvertToDER(r.TimeStampToken.FullBytes)
+	if err != nil {
+		return nil, err
+	}
+	signedData, err := ParseSignedData(raw)
+	if err != nil {
+		return nil, err
+	}
+	if err := signedData.Verify(nil); err != nil {
+		return nil, err
+	}
+	return signedData, nil
 }
 
 func (r *Response) TimeStampTokenInfo() (*TSTInfo, error) {
@@ -41,6 +52,9 @@ func (r *Response) TimeStampTokenInfo() (*TSTInfo, error) {
 		return nil, err
 	}
 
+	if !OIDCTTSTInfo.Equal(signed.ContentType) {
+		return nil, errors.New("content is not of type TST info")
+	}
 	info := &TSTInfo{}
 	if _, err := asn1.Unmarshal(signed.Content, info); err != nil {
 		return nil, err
