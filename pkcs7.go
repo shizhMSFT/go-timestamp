@@ -6,6 +6,7 @@ import (
 	"encoding/asn1"
 	"errors"
 	"fmt"
+	"math/big"
 )
 
 // ContentInfo ::= SEQUENCE {
@@ -29,7 +30,7 @@ type SignedData struct {
 	EncapsulatedContentInfo    EncapsulatedContentInfo
 	Certificates               asn1.RawValue          `asn1:"optional,tag:0"`
 	CRLs                       []pkix.CertificateList `asn1:"optional,tag:1"`
-	SignerInfos                asn1.RawValue          `asn1:"set"`
+	SignerInfos                []SignerInfo           `asn1:"set"`
 }
 
 // EncapsulatedContentInfo ::= SEQUENCE {
@@ -38,6 +39,40 @@ type SignedData struct {
 type EncapsulatedContentInfo struct {
 	ContentType asn1.ObjectIdentifier
 	Content     asn1.RawValue `asn1:"explicit,optional,tag:0"`
+}
+
+// SignerInfo ::= SEQUENCE {
+//   version CMSVersion,
+//   sid SignerIdentifier,
+//   digestAlgorithm DigestAlgorithmIdentifier,
+//   signedAttrs [0] IMPLICIT SignedAttributes OPTIONAL,
+//   signatureAlgorithm SignatureAlgorithmIdentifier,
+//   signature SignatureValue,
+//   unsignedAttrs [1] IMPLICIT UnsignedAttributes OPTIONAL }
+type SignerInfo struct {
+	Version            int
+	SignerIdentifier   IssuerAndSerialNumber
+	DigestAlgorithm    pkix.AlgorithmIdentifier
+	SignedAttributes   []Attribute `asn1:"optional,tag:0"`
+	SignatureAlgorithm pkix.AlgorithmIdentifier
+	Signature          []byte
+	UnsignedAttributes []Attribute `asn1:"optional,tag:1"`
+}
+
+// IssuerAndSerialNumber ::= SEQUENCE {
+//   issuer Name,
+//   serialNumber CertificateSerialNumber }
+type IssuerAndSerialNumber struct {
+	Issuer       asn1.RawValue
+	SerialNumber *big.Int
+}
+
+// Attribute ::= SEQUENCE {
+//   attrType OBJECT IDENTIFIER,
+//   attrValues SET OF AttributeValue }
+type Attribute struct {
+	Type   asn1.ObjectIdentifier
+	Values []asn1.RawValue `asn1:"set"`
 }
 
 func ParseSignedData(data []byte, contentType asn1.ObjectIdentifier) ([]byte, error) {
